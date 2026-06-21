@@ -16,6 +16,37 @@
 3. Subscribe to notify characteristics without sending protocol commands.
 4. Record handles, UUIDs, properties, MTU, and notification payloads.
 
+## First Ring 5 observations
+
+Captured on 2026-06-21 in Lisbon after disabling Bluetooth on the paired phone.
+macOS CoreBluetooth does not expose the real BLE MAC address, so the addresses
+below are macOS peripheral UUIDs rather than the ring MAC.
+
+Known device details from Oura app:
+
+- Model: Oura Ring 5
+- Serial: `50380B2617647259`
+- BLE MAC: `c9:bc:a2:5d:ac:56`
+
+Advertisements observed:
+
+- Ring:
+  - macOS UUID: `F928A493-157D-B2B5-0D19-F43F8DB5680E`
+  - Name: `Oura Ring 5`
+  - RSSI: `-81`
+  - Service UUID: `98ed0001-a541-11e4-b6a0-0002a5d5c51b`
+  - Manufacturer data: `02b2:04706b01`
+- Charging case:
+  - macOS UUID: `724CE68A-F69F-B641-B08E-DD251A0EF3F9`
+  - Name: `Oura Ring 5 Charging Case`
+  - RSSI: `-84`
+  - Service UUID: `8bc5888f-c577-4f5d-857f-377354093f13`
+  - Manufacturer data: `02b2:04a00b00`
+
+Direct service enumeration attempts against both macOS UUIDs timed out with
+Bleak/CoreBluetooth. Next steps are to repeat while the ring is on the charger
+and the phone Bluetooth remains off, then try a longer connection timeout.
+
 ## Low-risk active probes
 
 These should only be attempted after service discovery confirms the likely
