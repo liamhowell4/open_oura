@@ -95,6 +95,7 @@ land. Each decoder has a unit test.
 | **`green_ibi_quality_event` (`0x80`)** | `ibi=(b1&7)|(b0<<3)`, `q=(b1>>3)&3` | **inter-beat intervals → heart rate** (validated: ~52 bpm resting) |
 | `ibi_and_amplitude_event` | 14-byte bit-packed | 6× IBI ms + PPG amplitude (pending real-data check) |
 | `activity_information` | state + MET bytes (`<128: ×0.1`, else `12.8+(b-128)×0.2`) | state + MET levels |
+| `motion_event` | orientation `b0>>5`, axes signed `i8×8`, intensity nibbles | orientation + avg x/y/z + intensity (validated worn) |
 | `spo2_event` | header + `u8` per sample | SpO2 % series |
 | `sleep_phase_*` | 2-bit codes, 4/byte | hypnogram deep/light/rem/awake |
 | `ambient` / `ehr_acm_intensity` | `u16` LE samples | raw values |
@@ -107,9 +108,9 @@ daytime-HR feature off.
 
 **Still to port** (catalogued from the `.so`, lower priority): the bit-packed
 session-stateful variants (`green_ibi_and_amp`, `spo2_ibi_and_amplitude`), the
-opaque `sleep_summary_1..4` fields, full `motion_event/period`, `real_steps`, and
-the ~40 `debug_data` statistics subtypes. Adding any of these never needs a
-re-sync — run `oura redecode`.
+opaque `sleep_summary_1..4` fields, `motion_period`, `real_steps`, and the ~40
+`debug_data` statistics subtypes. Adding any of these never needs a re-sync — run
+`oura redecode`.
 
 ## Live raw-data channels (not history events)
 
@@ -135,8 +136,15 @@ Honest status of what's trustworthy vs. provisional:
 
 **Verified** — matched byte-exact to the native parser and/or validated on real
 captures/live: device info, battery, auth/pair, event sync, `temp_event`/
-`temp_period`, `green_ibi_quality` (`0x80` → heart rate, ~52 bpm resting),
-`time_sync`, `state_change`/`wear`, debug ASCII, live **ACM** stream, RData `state`.
+`temp_period`, `green_ibi_quality` (`0x80` → heart rate, ~50 bpm resting,
+1100+ beats), `motion_event` (orientation + axes + intensity, validated on 251
+worn samples), `time_sync`, `state_change`/`wear`, debug ASCII, live **ACM**
+stream, RData `state`.
+
+> Ring-5 daytime-HR finding: with the daytime-HR feature on, Ring 5 emits HR as
+> `green_ibi_quality` (`0x80`), **not** `ibi_and_amplitude` (`0x60`). So daytime
+> sync already yields heart rate, motion, activity, and temperature — no sleep
+> needed for those.
 
 **Best-effort** — ported from the decompiled logic but **not yet confirmed against
 real bytes** (no such data captured yet, or no ground truth):
@@ -149,6 +157,14 @@ real bytes** (no such data captured yet, or no ground truth):
 - `spo2_event`, `sleep_phase_*`, `ambient`/`ehr` u16 — logic clear, awaiting real
   worn/asleep data.
 
+**Requires rest/sleep to even appear (cannot be validated live, daytime):** these
+events are only produced once the ring has rested/slept, so their decoders are in
+place but unproven until an overnight worn sync — `hrv_event` (5-min RMSSD),
+`spo2_event` (nighttime), `sleep_phase_*` (hypnogram), `sleep_summary_1..4`.
+`ibi_and_amplitude` (`0x60`) was **not observed on Ring 5 during the day** (HR
+comes via `0x80`), so it likely appears only at night or on other firmware —
+its bit-packed decoder stays best-effort until real `0x60` bytes are seen.
+
 **Assumptions** baked in: event-body timestamps are the envelope's ring time
 (deciseconds), not the native's resolved wall-clock; batched events' per-sample
 times (HRV 5 min, etc.) are documented but not emitted per-sample yet. ACM counts
@@ -159,8 +175,8 @@ are raw (~1000/g at rest); no g-unit conversion is applied.
   session-stateful (need carried state for corrected timestamps).
 - `sleep_summary_1..4` — fields are opaque/packed in the decompile; best decoded
   against an overnight capture cross-checked with the trends CSV.
-- `motion_event`/`motion_period` full fields, `real_steps`, `on_demand_meas`,
-  `aohr`, and the ~40 `debug_data` statistics subtypes.
+- `motion_period` (2-bit-packed samples), `real_steps`, `on_demand_meas`, `aohr`,
+  and the ~40 `debug_data` statistics subtypes. (`motion_event` is now decoded.)
 - **RData collection start + page decode**: starting writes a persistent flash
   session, and the page payload format lives in `libecore`/native code we haven't
   decoded — so we expose only read/teardown, not capture, to avoid leaving the ring
