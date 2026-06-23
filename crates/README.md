@@ -34,18 +34,29 @@ oura scan
 # Device info (firmware, serial, capabilities; battery needs the key)
 oura --key-file key.hex info
 
+# Pair with a factory-reset ring: install + save a new auth key
+oura --name "Oura Ring 5" --key-file key.hex pair
+
+# Show / enable measurement features (HR, SpO2 are off after a key-only pairing)
+oura --key-file key.hex features --enable-hr --enable-spo2
+
 # Drain history events into SQLite (incremental; resumes from a saved cursor)
 oura --name "Oura Ring Gen3" --key-file key.hex --db oura.db sync
 
 # Latest cached HR / SpO2 values (ring must be worn)
 oura --key-file key.hex latest
 
-# Live heart rate stream for 30s (ring must be worn)
-oura --key-file key.hex live-hr --seconds 30
+# Live heart rate stream for 30s (ring must be worn & measuring)
+oura --key-file key.hex live-hr --seconds 30 [--raw]
 
 # Offline: event counts already stored in the database
 oura --db oura.db events
 ```
+
+> After pairing a ring yourself, its measurement features (daytime HR, SpO2…) are
+> **off** — the official app turns them on at onboarding. Run `features --enable-hr
+> --enable-spo2` once, then the ring begins measuring and HR/IBI/HRV/SpO2 events
+> start accumulating (the ring decides when to measure, so allow a few minutes).
 
 Common flags are global: `--name` (scan name filter, default `Oura`), `--address`,
 `--scan-timeout`, `--db`, `--key-file`.
@@ -70,13 +81,21 @@ captured bytes against the protobuf field shapes (each backed by a test):
 
 | Event | Layout | Decoded as |
 | --- | --- | --- |
-| `temp_event` | 7× `i16` LE, centi-°C | seven probe temperatures (°C) |
+| `temp_event` | N× `i16` LE, centi-°C | probe temperatures (°C) — 7 on Ring 3, 3 on Ring 5; verified worn (~33 °C) |
 | `temp_period`, `sleep_temp_event` | `i16` LE, centi-°C | temperature (°C) |
 | `time_sync` | `u32` LE | unix timestamp |
 | `state_change`, `wear_event` | state byte + ASCII | state + text |
 | `debug_event`, `debug_data` | ASCII | text |
 
-Still raw, pending a **worn-ring** capture (the test ring was on its charger, so
-HR/PPG/motion/activity bodies were noise or zero): `ibi_event`, `hrv_event`,
-`spo2_event`, sleep summaries/phases, `activity_information`, `motion_event`,
-`ppg_amplitude`. Adding a decoder never needs a re-sync — the raw bytes are kept.
+**Still raw / undecoded.** Two reasons, distinct:
+
+- *Native-packed, no ground truth yet:* `motion_event` (6-byte packed; proto has 9
+  fields), `activity_information` (14-byte; likely 13 MET levels + step count), and a
+  **Ring-5-only event `tag 0x80`** (frequent, ~14-byte, absent from the Ring-3 tag
+  map and not identifiable from the decompiled Java — the tag→type table is native).
+  These need correlation against ground truth or `libringeventparser.so` disassembly.
+- *Not emitted until measured:* `ibi_event`, `hrv_event`, `spo2_event`, and all
+  `sleep_*` events only appear once HR/SpO2 features are enabled (`features
+  --enable-hr --enable-spo2`) and the ring has actually measured / slept.
+
+Adding a decoder never needs a re-sync — the raw bytes are always retained.

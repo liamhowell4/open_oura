@@ -12,6 +12,60 @@ There are two separate DFU paths:
   CYACD2 bootloader on a dedicated service `00060000-f8ce-11e4-abf4-0002a5d5c51b`
   (`firmware/cypress/CypressFirmwareUpdateService.java`).
 
+## Where the image comes from (cloud OTA download)
+
+Before any BLE flashing, the app fetches the image from Oura's cloud. The whole
+chain is **account-authenticated** — every call carries
+`Authorization: Bearer <accessToken>` injected for the `@com.ouraring.core.network.a`
+annotation from `AccessTokenModel.getAccessTokenBearer()`. That bearer is the Oura
+**account** OAuth token (MOI/OAuth login, stored in encrypted prefs) — *not* the
+ring BLE auth key. Host is `api.ouraring.com` (`Endpoint.PRODUCTION.url`).
+
+1. **Discover available packages** — `ClientConfigurationService.downloadConfig(...)`
+   (authenticated) returns a `ClientConfiguration` whose two relevant fields are:
+   - `firmware_updates`: `List<FirmwareLauncherUpdate{hardware_type, type, version}>`
+     where `hardware_type ∈ {GEN2, GEN2M, GEN2X, GEN4, NOMAD}` and
+     `type ∈ {APPLICATION, BOOTLOADER}` — i.e. "what version is current for your ring".
+   - `ota_files` (JSON `ota_files`): `List<OtaDescriptor{type, version, slug}>` — the
+     concrete packages to fetch. `type` is a `PackageType.safeName` (table below).
+2. **Get the manifest** — `OtaPackageService.getOtaManifest(type, version, slug)`:
+   `GET /api/v2/file/{type}/{version}/{slug}` → `OtaPackageManifest`:
+   ```
+   { type, version, slug, filename, md5, sha256, uploaded_at, size, url }
+   ```
+3. **Download the bytes** — `OtaPackageService.downloadOtaPackage(@Url url)`:
+   `GET <manifest.url>` with `Content-Type: application/octet-stream` →
+   `ResponseBody` (the raw CYACD2 / binary OTA file documented below). `url` is an
+   absolute (CDN/signed) URL from the manifest. The download is integrity-checked
+   against `md5`/`sha256`/`size`, then handed to `DFUProvider.startFirmwareUpdate(
+   address, firmwarePath, firmwareType)` for the BLE flash. Orchestration lives in
+   `com/ouraring/oura/otapackages/` (`OtaPackageManager`/`l.java`); the retrofit
+   service is `com/ouraring/oura/model/backend/OtaPackageService.java`.
+
+`PackageType.safeName` values (the `{type}` path segment):
+
+| safeName | enum constant | notes |
+| --- | --- | --- |
+| `bootloader_gen2` / `_gen2m` / `_gen2x` / `_oreo` | BootloaderGen2/2m/2x/**Gen4** | bootloader images |
+| `firmware_gen2` / `_gen2m` / `_gen2x` | FirmwareGen2/2m/2x | Gen2 ("Heritage") variants |
+| `firmware_oreo` | **FirmwareGen4** | note: `oreo` is the Gen4 app image |
+| `firmware_cooper`, `firmware_bentley`, `firmware_aston` | FirmwareCooper/Bentley/Aston | model codenames |
+| `firmware_nomad`, `firmware_nomad2` | FirmwareNomad/Nomad2 | newer rings |
+| `insight_content` | InsightsContent | non-firmware content pack |
+| `assa_config` | AssaConfig | non-firmware (ASSA) config |
+
+(Exact codename→retail-model mapping for the Ring 3 Horizon / Ring 5 on hand is not
+asserted here — it needs a real `downloadConfig` response or capture correlation.)
+
+**Can we download the latest image right now?** No — not without an Oura account
+token. Probing `GET https://api.ouraring.com/api/v2/file/firmware_oreo/1.0.0/test`
+returns **HTTP 401 (nginx/CloudFront)**; the endpoint is hard-gated and rejects an
+absent or malformed bearer. We hold ring BLE auth keys but no cloud **account**
+OAuth token, and the `{version}`/`{slug}` themselves only come from the
+authenticated `downloadConfig`. To actually pull an image you need a valid account
+access token (capturable from a logged-in app session); given that, the two GETs
+above reconstruct the full download.
+
 ## Path A opcodes
 
 | Step | Request | Notes |
