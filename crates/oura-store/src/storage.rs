@@ -9,9 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::device::{Battery, DeviceInfo};
+use oura_protocol::device::{Battery, DeviceInfo};
 use crate::error::Result;
-use crate::events::RingEvent;
+use oura_protocol::events::RingEvent;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS device (
@@ -186,12 +186,12 @@ impl Store {
         let total = rows.len();
         let mut decoded_count = 0;
         for (id, tag, body) in rows {
-            let decoded = crate::events::decode_event_body(tag as u8, &body)
+            let decoded = oura_protocol::events::decode_event_body(tag as u8, &body)
                 .map(|v| serde_json::to_string(&v).unwrap_or_default());
             if decoded.is_some() {
                 decoded_count += 1;
             }
-            let name = crate::events::event_name(tag as u8);
+            let name = oura_protocol::events::event_name(tag as u8);
             self.conn.execute(
                 "UPDATE events SET decoded_json = ?1, name = ?2 WHERE id = ?3",
                 params![decoded, name, id],

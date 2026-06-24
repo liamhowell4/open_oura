@@ -10,7 +10,7 @@ use futures::StreamExt;
 use tokio::sync::broadcast;
 
 use crate::error::{Error, Result};
-use crate::protocol;
+use oura_protocol::protocol;
 use crate::transport::Transport;
 
 /// A ring discovered while scanning.

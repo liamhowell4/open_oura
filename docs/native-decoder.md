@@ -3,7 +3,7 @@
 The ring's history-event **body** layouts are not in the decompiled Java app — the
 binary→struct conversion happens in a native library, `libringeventparser.so`
 (JNI `nativeParseEvents`). We decompiled it to port the exact logic into
-`oura-core` (`events::decode_body`), instead of guessing byte layouts.
+`oura-protocol` (`oura-protocol::events::decode_body`), instead of guessing byte layouts.
 
 ## How it was done
 
@@ -38,7 +38,7 @@ The `.so`, the Ghidra project, and the decompiled C are RE work products kept lo
 ## Workflow for adding a decoder
 
 1. Read the relevant `parse_api_*` in the decompiled C.
-2. Port its length check + field reads into `events::decode_body` with a unit test.
+2. Port its length check + field reads into `oura-protocol::events::decode_body` with a unit test.
 3. `oura redecode` to apply it to events already stored raw — no re-sync needed.
 
 See `crates/README.md` for the current decoding-status table.

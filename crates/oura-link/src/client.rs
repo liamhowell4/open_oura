@@ -2,11 +2,11 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::auth::{encrypt_nonce, AuthResult};
-use crate::device::{self, Battery, Capability, DeviceInfo};
+use oura_protocol::auth::{encrypt_nonce, AuthResult};
+use oura_protocol::device::{self, Battery, Capability, DeviceInfo};
 use crate::error::{Error, Result};
-use crate::events::{EventBatchSummary, RingEvent};
-use crate::protocol::{self, feature, feature_mode, Packet};
+use oura_protocol::events::{EventBatchSummary, RingEvent};
+use oura_protocol::protocol::{self, feature, feature_mode, Packet};
 use crate::transport::{transact, Transport};
 
 /// Default quiet window for collecting responses to a request.

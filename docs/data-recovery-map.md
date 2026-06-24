@@ -97,3 +97,18 @@ Recoverable from the ring without Oura's cloud: raw PPG/accel/gyro/temp, live HR
 (IBI->BPM), SpO2, IBI/HRV, on-device sleep stages, MET levels + steps, battery,
 device info. NOT recoverable: the 0-100 scores and workout classification --
 those are Oura-cloud-only and would have to be reimplemented locally.
+
+## Correction: scores/sleep are computed on-device, not in the cloud
+
+Later reverse-engineering of the on-phone `ecore` native engine (`libappecore.so`)
+revised the picture above: the Sleep / Readiness / Activity **scores**, sleep
+durations/efficiency, temperature baseline, HRV, breathing rate, simple SpO2, and
+cycle prediction are all computed **on the phone** by ecore, written to the local
+database, and *then uploaded* — the cloud stores and round-trips them, it does not
+originate them. The `*_algorithm_version` stamps (`v1/v2/nssa/sleepnet`) identify
+*local* algorithms. See [`algorithms/README.md`](algorithms/README.md).
+
+The genuine exceptions still requiring more than ecore: the **sleep hypnogram**
+(the on-device SleepNet PyTorch model / ring staging), **SpO2 OVI/BDI** scoring,
+and **workout auto-classification** (the one true cloud ML call,
+`POST /api/activity-tagging/v2`).

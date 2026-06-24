@@ -1,15 +1,24 @@
-# Rust client (`oura-core` + `oura-cli`)
+# Rust client (workspace)
 
 An independent, cloud-free client that reads data directly from an Oura ring over
 BLE. Designed to work across ring generations (Ring 3/4/5): it shares the common
 GATT layout and auth flow, branches on reported *capabilities* rather than model
 numbers, and always stores event bodies raw so unknown formats are never lost.
 
-- **`oura-core`** — the reusable library: packet framing, app-auth (AES), a
-  `Transport` trait with a `btleplug` BLE implementation, device-info parsers, the
-  history-event drain loop, and optional SQLite storage. Pure logic is unit-tested
-  against real captured packets, with no ring required.
-- **`oura-cli`** — a thin `oura` binary over the library.
+The code is split by concern — **fetch → interpret → apply** (see
+[`docs/architecture.md`](../docs/architecture.md)):
+
+- **`oura-protocol`** — *interpret (low level)*: packet framing, app-auth (AES),
+  request builders, device parsers, and the event-body decoders (bytes → typed
+  samples). Pure, no I/O; unit-tested against real captured packets.
+- **`oura-link`** — *fetch*: the `Transport` trait + `btleplug` BLE, the
+  connection/auth handshake, the history-event sync drain, live HR/ACM, features,
+  RData. The high-level `OuraClient`.
+- **`oura-analysis`** — *interpret (high level)*: on-device metric algorithms
+  ported from Oura's `ecore` engine (HRV, SpO2, baselines, sleep summary, the
+  three scores). See [`docs/algorithms/`](../docs/algorithms/README.md).
+- **`oura-store`** — *apply*: SQLite persistence (raw events, readings, sync cursor).
+- **`oura-cli`** — the `oura` binary wiring it together (+ the `viz`/`game` web UIs).
 
 ## Build
 
