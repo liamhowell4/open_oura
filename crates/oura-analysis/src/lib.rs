@@ -8,6 +8,7 @@
 //! cycle are being ported from the decompiled ecore (see docs/algorithms/).
 pub mod baseline;
 pub mod hrv;
+pub mod metabolic;
 pub mod sleep;
 pub mod sleep_debt;
 pub mod spo2;
