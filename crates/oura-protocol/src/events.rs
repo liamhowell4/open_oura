@@ -64,8 +64,11 @@ fn decode_body(tag: u8, body: &[u8]) -> Option<serde_json::Value> {
     match tag {
         // time_sync: u32 LE unix timestamp (plus trailing timezone bytes).
         0x42 => decode_time_sync(body),
-        // debug_event / debug_data: ASCII strings (e.g. "git;ca22327", "SNH;4369").
-        0x43 | 0x61 => decode_ascii(body),
+        // debug_event: ASCII strings (e.g. "git;ca22327", "SNH;4369").
+        0x43 => decode_ascii(body),
+        // debug_data: ASCII when printable, else binary DebugData subtypes
+        // (charging/battery/…) dispatched on the first byte (parse_api_debug_data).
+        0x61 => decode_debug_data(body),
         // state_change / wear_event: one state byte then an ASCII description.
         0x45 | 0x53 => decode_state_text(body),
         // temp_event (7 probes), temp_period, sleep_temp_event: int16 LE centi-°C.
@@ -108,6 +111,18 @@ fn decode_body(tag: u8, body: &[u8]) -> Option<serde_json::Value> {
         0x79 => decode_telemetry(body, "self_test_data"),     // parse_api_selftest_data_event @ 0x3ca74c
         0x82 => decode_telemetry(body, "scan_start"),         // parse_api_scan_start @ 0x3cbe20
         0x83 => decode_telemetry(body, "scan_end"),           // parse_api_scan_end @ 0x3cc43c
+        // ── Ported from the native parser, NOT YET VALIDATED against captured
+        //    bytes (these event types haven't appeared in our syncs). Each emits
+        //    `"_status":"unvalidated"`; drop it once confirmed on a real sample.
+        0x49 => decode_sleep_summary_1(body), // parse_api_sleep_summary_1 @ 0x3c74d8
+        0x4c => decode_sleep_summary_2(body), // parse_api_sleep_summary_2 @ 0x3c76c8
+        0x4f => decode_sleep_summary_3(body), // parse_api_sleep_summary_3 @ 0x3c78bc
+        0x58 => decode_sleep_summary_4(body), // parse_api_sleep_summary_4 @ 0x3c7ad8
+        0x7e | 0x7f => decode_real_steps(body), // parse_api_real_steps_features_1/2 @ 0x3c03a4/0x3c0720
+        0x86 => decode_aohr(body),            // parse_api_aohr_event @ 0x3cd4f0
+        0x84 => decode_ambient(body),         // parse_api_ambient_event @ 0x3cefb4
+        0x87 => decode_atlas_metadata(body),  // parse_api_atlas_metadata @ 0x3c3c9c
+        0x88 => decode_atlas_raw_bioz(body),  // parse_atlas_raw_data @ 0x3c4c08
         _ => None,
     }
 }
@@ -444,6 +459,237 @@ fn decode_telemetry(body: &[u8], kind: &str) -> Option<serde_json::Value> {
     }))
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// UNVALIDATED decoders — layouts ported from the native parser (libringeventparser
+// .so) but not yet confirmed against captured bytes, because these event types
+// have not appeared in our syncs. Field names/units are inferred from the
+// decompiled arithmetic (often only raw copies, so names are structural). Each
+// result carries `"_status":"unvalidated"`. To validate: trigger the event
+// (e.g. a walk for real_steps, the charger for battery), capture, then confirm
+// the field mapping and remove the marker. See docs/algorithms/unvalidated-events.md.
+// ───────────────────────────────────────────────────────────────────────────
+
+fn le16(b: &[u8], i: usize) -> u16 {
+    u16::from_le_bytes([b[i], b[i + 1]])
+}
+fn le32(b: &[u8], i: usize) -> u32 {
+    u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]])
+}
+
+/// `sleep_summary_1` (tag `0x49`): two minute-offsets from the event's ring time
+/// to the sleep window start/end. The absolute timestamps need the event header
+/// (unavailable here), so we surface the raw offsets.
+fn decode_sleep_summary_1(body: &[u8]) -> Option<serde_json::Value> {
+    if body.len() < 4 {
+        return None;
+    }
+    Some(serde_json::json!({
+        "start_offset_min": le16(body, 0),
+        "end_offset_min": le16(body, 2),
+        "_status": "unvalidated",
+    }))
+}
+
+/// `sleep_summary_2` (tag `0x4c`): 14-byte record (u64, u16, u32). Field
+/// names/units unresolved in the decompile.
+fn decode_sleep_summary_2(body: &[u8]) -> Option<serde_json::Value> {
+    if body.len() != 14 {
+        return None;
+    }
+    Some(serde_json::json!({
+        "field_a_u64": u64::from_le_bytes(body[0..8].try_into().unwrap()),
+        "field_b_u16": le16(body, 8),
+        "field_c_u32": le32(body, 10),
+        "_status": "unvalidated",
+    }))
+}
+
+/// `sleep_summary_3` (tag `0x4f`): 11-byte record; three fields are `>>3`
+/// (÷8 fixed-point) in the parser.
+fn decode_sleep_summary_3(body: &[u8]) -> Option<serde_json::Value> {
+    if body.len() != 11 {
+        return None;
+    }
+    Some(serde_json::json!({
+        "field_a": body[0] >> 3,
+        "field_b": body[1] >> 3,
+        "field_c": (le16(body, 2) >> 3) as u8,
+        "field_d_u32": le32(body, 4),
+        "field_e_u16": le16(body, 8),
+        "field_f_u8": body[10],
+        "_status": "unvalidated",
+    }))
+}
+
+/// `sleep_summary_4` (tag `0x58`): 7-byte record (u32, u16, u8).
+fn decode_sleep_summary_4(body: &[u8]) -> Option<serde_json::Value> {
+    if body.len() != 7 {
+        return None;
+    }
+    Some(serde_json::json!({
+        "field_a_u32": le32(body, 0),
+        "field_b_u16": le16(body, 4),
+        "field_c_u8": body[6],
+        "_status": "unvalidated",
+    }))
+}
+
+/// `real_steps_features_1/2` (tags `0x7e`/`0x7f`): a 14-byte bit-packed feature
+/// record (the firmware packs 9-bit counts as `byte*2 + carry_bit`). The parser
+/// combines parts 1 and 2 statefully; here we surface part-1's unpacked fields so
+/// the step-count field can be identified once real data is captured.
+fn decode_real_steps(body: &[u8]) -> Option<serde_json::Value> {
+    if body.len() != 14 {
+        return None;
+    }
+    let p = body;
+    let fields = [
+        ((p[3] >> 7) as u16) | ((p[0] as u16) << 1),
+        (p[1] as u16) << 1,
+        (p[2] as u16) << 1,
+        (p[3] & 0x7f) as u16,
+        p[4] as u16,
+        p[5] as u16,
+        p[6] as u16,
+        p[7] as u16,
+        ((p[11] >> 7) as u16) | ((p[8] as u16) << 1),
+        (p[9] as u16) << 1,
+        (p[10] as u16) << 1,
+        (p[11] & 0x7f) as u16,
+        p[12] as u16,
+        p[13] as u16,
+    ];
+    Some(serde_json::json!({ "fields": fields, "_status": "unvalidated" }))
+}
+
+/// `aohr_event` (tag `0x86`): always-on HR. Header flag, a base offset, then a
+/// count and `count` 2-byte samples `(value, status)` at a fixed 1920 ms interval.
+fn decode_aohr(body: &[u8]) -> Option<serde_json::Value> {
+    if body.len() < 3 {
+        return None;
+    }
+    let count = body[2] as usize;
+    if body.len() != count * 2 + 3 {
+        return None;
+    }
+    let values: Vec<u8> = (0..count).map(|i| body[3 + 2 * i]).collect();
+    let status: Vec<u8> = (0..count).map(|i| body[4 + 2 * i]).collect();
+    Some(serde_json::json!({
+        "flag": body[0] & 1,
+        "base_offset": body[1],
+        "interval_ms": 1920,
+        "values": values,
+        "status": status,
+        "_status": "unvalidated",
+    }))
+}
+
+/// `ambient_event` (tag `0x84`): signed-16 samples at a 5-minute interval.
+fn decode_ambient(body: &[u8]) -> Option<serde_json::Value> {
+    if body.is_empty() || !body.len().is_multiple_of(2) {
+        return None;
+    }
+    let values: Vec<i16> = (0..body.len() / 2)
+        .map(|i| le16(body, 2 * i) as i16)
+        .collect();
+    Some(serde_json::json!({
+        "values": values,
+        "interval_min": 5,
+        "_status": "unvalidated",
+    }))
+}
+
+/// `atlas_metadata` (tag `0x87`): control message that opens an Atlas (bioZ)
+/// stream. Only the subtype-0 "start" form (10 bytes) is decoded.
+fn decode_atlas_metadata(body: &[u8]) -> Option<serde_json::Value> {
+    if body.len() != 10 || body[0] != 0 {
+        return None;
+    }
+    Some(serde_json::json!({
+        "subtype": body[0],
+        "sensor_type": body[1],
+        "cfg_a": body[3],
+        "cfg_b": body[4],
+        "channel_count": body[5],
+        "cfg_word": le32(body, 6),
+        "_status": "unvalidated",
+    }))
+}
+
+/// `atlas_raw_bioz_data` (tag `0x88`): delta-coded i32 sample stream. Each byte is
+/// a signed-8 delta added to a running value; a `0x80` byte escapes into a 3-byte
+/// 24-bit little-endian absolute sample (sign-extended).
+fn decode_atlas_raw_bioz(body: &[u8]) -> Option<serde_json::Value> {
+    if body.is_empty() {
+        return None;
+    }
+    let mut samples: Vec<i32> = Vec::new();
+    let mut run: i32 = 0;
+    let mut mode_abs = false;
+    let mut acc: u32 = 0;
+    let mut k = 0u32;
+    for &b in body {
+        if !mode_abs {
+            if b == 0x80 {
+                mode_abs = true;
+                acc = 0;
+                k = 0;
+            } else {
+                run = run.wrapping_add(b as i8 as i32);
+                samples.push(run);
+            }
+        } else {
+            acc |= (b as u32) << (k * 8);
+            k += 1;
+            if k == 3 {
+                if acc & 0x80_0000 != 0 {
+                    acc |= 0xff00_0000;
+                }
+                run = acc as i32;
+                samples.push(run);
+                mode_abs = false;
+            }
+        }
+    }
+    Some(serde_json::json!({ "samples": samples, "_status": "unvalidated" }))
+}
+
+/// `debug_data` (tag `0x61`): ASCII when the body is printable, otherwise a binary
+/// DebugData record dispatched on the first byte (subtype). Charging/battery
+/// subtypes are decoded; others are tagged and preserved. UNVALIDATED for the
+/// binary path. From `parse_api_debug_data @ 0x3b0dd4`.
+fn decode_debug_data(body: &[u8]) -> Option<serde_json::Value> {
+    if body.is_empty() {
+        return None;
+    }
+    let printable = body.iter().all(|&b| b == 0 || (0x20..0x7f).contains(&b));
+    if printable {
+        return decode_ascii(body);
+    }
+    match body[0] {
+        0x11 if body.len() >= 5 => Some(serde_json::json!({
+            "kind": "charging_time", "subtype": 0x11,
+            "charging_time": le32(body, 1), "_status": "unvalidated",
+        })),
+        0x24 if body.len() >= 4 => {
+            // VALIDATED on captured data: battery_pct 92-100 (%), voltage 4280-4391 mV.
+            let mut v = serde_json::json!({
+                "kind": "battery_level_changed", "subtype": 0x24,
+                "battery_pct": body[1], "voltage_mv": le16(body, 2),
+            });
+            if body.len() > 4 {
+                v["flag_a"] = serde_json::json!((body[4] >> 1) & 1);
+                v["flag_b"] = serde_json::json!(body[4] & 1);
+            }
+            Some(v)
+        }
+        sub => Some(serde_json::json!({
+            "kind": "debug_data", "subtype": sub,
+            "raw": hex::encode(body), "_status": "unvalidated",
+        })),
+    }
+}
+
 pub fn event_name(tag: u8) -> &'static str {
     match tag {
         0x41 => "ring_start",
@@ -539,6 +785,48 @@ impl EventBatchSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aohr_unvalidated_shape() {
+        // count=6 -> len = 6*2+3 = 15; values at even, status at odd
+        let mut b = vec![0x01u8, 0x00, 0x06];
+        for i in 0..6u8 {
+            b.push(50 + i);
+            b.push(1);
+        }
+        let v = decode_aohr(&b).unwrap();
+        assert_eq!(v["values"].as_array().unwrap().len(), 6);
+        assert_eq!(v["interval_ms"], 1920);
+        assert_eq!(v["_status"], "unvalidated");
+    }
+
+    #[test]
+    fn ambient_signed_samples() {
+        let v = decode_ambient(&[0x10, 0x00, 0xff, 0xff]).unwrap();
+        assert_eq!(v["values"], serde_json::json!([16, -1]));
+    }
+
+    #[test]
+    fn atlas_bioz_delta_and_escape() {
+        // +5, +5, escape -> 24-bit absolute 100
+        let v = decode_atlas_raw_bioz(&[5, 5, 0x80, 0x64, 0x00, 0x00]).unwrap();
+        assert_eq!(v["samples"], serde_json::json!([5, 10, 100]));
+    }
+
+    #[test]
+    fn debug_data_battery_subtype() {
+        // non-printable body -> binary path; subtype 0x24 battery, level 95, mV 4200
+        let v = decode_debug_data(&[0x24, 95, 0x68, 0x10]).unwrap();
+        assert_eq!(v["kind"], "battery_level_changed");
+        assert_eq!(v["battery_pct"], 95);
+        assert_eq!(v["voltage_mv"], 4200);
+    }
+
+    #[test]
+    fn debug_data_ascii_still_works() {
+        let v = decode_debug_data(b"git;ca22327").unwrap();
+        assert_eq!(v["ascii"], "git;ca22327");
+    }
 
     #[test]
     fn decodes_feature_session() {
