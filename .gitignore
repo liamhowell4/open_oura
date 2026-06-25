@@ -33,6 +33,9 @@ reverse/android/jadx-main/
 *.csv
 notes/
 
+# Local security audit (findings kept private, not published to the fork).
+docs/security-audit/
+
 # Playwright MCP artifacts
 .playwright-mcp/
 

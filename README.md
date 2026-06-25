@@ -47,13 +47,22 @@ asteroid game driven by the ring.
 
 ## Research bench (Python)
 
+Requires **Python 3.13** (older interpreters resolve `mitmproxy` to an ancient,
+vulnerable release — see the token sniffer below).
+
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python tools/oura_protocol.py --list
 ```
 
 State-changing and destructive commands are hidden behind `--include-state` and
 `--include-danger`. On macOS, grant Bluetooth permission to the terminal.
+
+`tools/oura_token_sniff.py` is a mitmproxy addon; install it separately
+(`.venv/bin/pip install mitmproxy`) and run via `mitmdump -s tools/oura_token_sniff.py`.
+mitmproxy pins `tornado`/`msgpack` to versions with open CVEs in its web-UI/
+serialization deps; this is upstream's to fix and is low-risk for a loopback-only
+proxy. `cargo audit` and the rest of the Python deps are clean.
 
 ## Documentation
 
